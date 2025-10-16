@@ -3,6 +3,8 @@ using Divitiae.Worker.Config;
 using Divitiae.Worker.Strategy;
 using Divitiae.Worker.Trading;
 using Microsoft.Extensions.Options;
+using Spectre.Console;
+using Divitiae.Worker.ConsoleUi;
 
 namespace Divitiae.Worker
 {
@@ -18,14 +20,14 @@ namespace Divitiae.Worker
     {
         private readonly Dictionary<string, DateTime> _cooldownUntil = new(StringComparer.OrdinalIgnoreCase);
         private TimeSpan InsufficientFundsCooldown => TimeSpan.FromMinutes(workerOptions.Value.InsufficientFundsCooldownMinutes);
-
-        private static decimal Floor2(decimal x) => Math.Floor(x * 100m) / 100m;
-        private static decimal Ceil2(decimal x) => Math.Ceiling(x * 100m) / 100m;
+        private readonly IConsoleRenderer _ui = new SpectreConsoleRenderer();
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             var opts = options.Value;
-            // Preload bars once at startup (noisy details suppressed)
+
+            _ui.RenderBanner("Divitiae Worker", Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Unknown", opts.Symbols);
+
             foreach (var symbol in opts.Symbols)
             {
                 var seedBars = await marketData.GetMinuteBarsAsync(symbol, opts.BarsSeed, stoppingToken);
@@ -34,19 +36,24 @@ namespace Divitiae.Worker
 
             while (!stoppingToken.IsCancellationRequested)
             {
-                logger.LogInformation("Cycle start: symbols=[{Symbols}]", string.Join(",", opts.Symbols));
+                _ui.RenderCycleStart(clock.UtcNow);
 
                 var cycleStart = clock.UtcNow;
                 try
                 {
                     var marketOpen = await trading.IsMarketOpenAsync(stoppingToken);
+                    _ui.RenderMarketState(marketOpen, cycleStart);
                     logger.LogInformation("Market {State} at {Time}", marketOpen ? "OPEN" : "CLOSED", cycleStart);
                     if (!marketOpen)
                     {
                         await Task.Delay(TimeSpan.FromSeconds(opts.PollingIntervalSeconds), stoppingToken);
-                        logger.LogInformation("Cycle end: market closed (duration {Dur} ms)\n", (int)(clock.UtcNow - cycleStart).TotalMilliseconds);
+                        _ui.RenderCycleEnd(clock.UtcNow - cycleStart);
+                        logger.LogInformation("Cycle end (duration {Dur} ms)\n", (int)(clock.UtcNow - cycleStart).TotalMilliseconds);
                         continue;
                     }
+
+                    // Symbols table
+                    _ui.BeginSymbolsTable();
 
                     foreach (var symbol in opts.Symbols)
                     {
@@ -56,15 +63,21 @@ namespace Divitiae.Worker
 
                         var decision = strategy.Evaluate(symbol, barCache.Get(symbol));
 
-                        // Price change info from previous close if available
                         var prevClose = barCache.Get(symbol).Count > 1 ? barCache.Get(symbol)[^2].Close : (decimal?)null;
+                        decimal? changeAbs = prevClose.HasValue ? bar.Close - prevClose.Value : null;
                         decimal? changePct = prevClose.HasValue && prevClose.Value != 0 ? (bar.Close - prevClose.Value) / prevClose.Value * 100m : null;
 
-                        logger.LogInformation("Checked {Symbol}: close={Close} {Delta}",
-                            symbol,
-                            bar.Close,
-                            changePct.HasValue ? $"change={changePct.Value:F2}%" : "change=n/a");
+                        var decisionLabel = decision.Action switch
+                        {
+                            TradeAction.Buy => "[green]BUY[/]",
+                            TradeAction.Sell => "[red]SELL[/]",
+                            _ => "[yellow]HOLD[/]"
+                        };
+                        var notes = decision.Action == TradeAction.Hold ? decision.Reason : null;
 
+                        _ui.AddSymbolRow(symbol, bar.Close, changeAbs, changePct, decisionLabel, notes);
+
+                        // Actions and file logs
                         if (decision.Action == TradeAction.Buy)
                         {
                             await TryEnterLongAsync(symbol, decision, stoppingToken);
@@ -73,15 +86,13 @@ namespace Divitiae.Worker
                         {
                             await TryExitLongAsync(symbol, stoppingToken);
                         }
-                        else if (decision.Action == TradeAction.Hold && decision.LastClose.HasValue && decision.EmaShort.HasValue && decision.EmaLong.HasValue)
-                        {
-                            logger.LogInformation("HOLD {Symbol}: price={P} emaS={S} emaL={L} reason={Reason}", symbol, decision.LastClose.Value, decision.EmaShort.Value, decision.EmaLong.Value, decision.Reason ?? "");
-                        }
+                        // No HOLD logs
                     }
+
+                    _ui.RenderSymbolsTable();
                 }
                 catch (TaskCanceledException)
                 {
-                    // benign cancellation due to HTTP timeouts or shutdown
                 }
                 catch (Exception ex)
                 {
@@ -89,10 +100,18 @@ namespace Divitiae.Worker
                 }
                 finally
                 {
+                    _ui.RenderCycleEnd(clock.UtcNow - cycleStart);
                     logger.LogInformation("Cycle end (duration {Dur} ms)\n", (int)(clock.UtcNow - cycleStart).TotalMilliseconds);
                 }
 
-                await Task.Delay(TimeSpan.FromSeconds(opts.PollingIntervalSeconds), stoppingToken);
+                // Status spinner between cycles
+                await AnsiConsole.Status()
+                    .StartAsync("Waiting for next cycle...", async ctx =>
+                    {
+                        ctx.Spinner(Spinner.Known.Dots12);
+                        ctx.Status("Waiting interval");
+                        await Task.Delay(TimeSpan.FromSeconds(opts.PollingIntervalSeconds), stoppingToken);
+                    });
             }
         }
 
@@ -127,7 +146,7 @@ namespace Divitiae.Worker
             var hasOpenOrders = await trading.HasOpenOrdersAsync(symbol, ct);
             if (hasPosition || hasOpenOrders)
             {
-                logger.LogInformation("Skip BUY {Symbol}: pos={Pos} ord={Ord}", symbol, hasPosition, hasOpenOrders);
+                // Skip silently
                 return;
             }
 
@@ -139,7 +158,7 @@ namespace Divitiae.Worker
             var last = decision.ReferencePrice ?? barCache.GetLastClose(symbol) ?? 0m;
             if (account.BuyingPower < (decimal)opts.MinNotionalUsd || last <= 0)
             {
-                logger.LogInformation("Skip BUY {Symbol}: bp={BP} min={Min} price={Price}", symbol, account.BuyingPower, (decimal)opts.MinNotionalUsd, last);
+                // Skip silently but start cooldown if funds are insufficient
                 if (account.BuyingPower < (decimal)opts.MinNotionalUsd) StartCooldown(symbol, "Insufficient buying power");
                 return;
             }
@@ -151,14 +170,14 @@ namespace Divitiae.Worker
                     Symbol = symbol,
                     Side = OrderSide.Buy,
                     NotionalUsd = decimal.Round(notional, 2),
-                    TakeProfitLimitPrice = 0, // ignored in simple order
-                    StopLossStopPrice = 0,    // ignored in simple order
+                    TakeProfitLimitPrice = 0,
+                    StopLossStopPrice = 0,
                     TimeInForce = "day"
                 }, ct);
 
-                // Try to fetch fresh position snapshot after order (may still be pending)
                 var pos = await trading.GetPositionAsync(symbol, ct);
                 var entry = pos?.AvgEntryPrice > 0 ? pos!.AvgEntryPrice : last;
+                _ui.RenderBuy(symbol, entry, notional);
                 logger.LogInformation("BUY {Symbol}: entry={Entry} notional={Notional}", symbol, entry, notional);
             }
             catch (Exception ex)
@@ -173,18 +192,18 @@ namespace Divitiae.Worker
             var pos = await trading.GetPositionAsync(symbol, ct);
             if (pos is null || pos.Quantity <= 0)
             {
-                logger.LogInformation("Skip SELL {Symbol}: no position", symbol);
+                // Skip silently
                 return;
             }
 
             await trading.ClosePositionAsync(symbol, ct);
 
-            // After close, we may not immediately know fill price; log with current and entry to estimate
             var exitPrice = pos.CurrentPrice;
             var entryPrice = pos.AvgEntryPrice;
             var pnlUsd = (exitPrice - entryPrice) * pos.Quantity;
             var pnlPct = entryPrice != 0 ? (exitPrice - entryPrice) / entryPrice * 100m : 0m;
 
+            _ui.RenderSell(symbol, entryPrice, exitPrice, pos.Quantity, decimal.Round(pnlUsd, 5), decimal.Round(pnlPct, 5));
             logger.LogInformation("SELL {Symbol}: entry={Entry} exit≈{Exit} qty={Qty} PnL={PnlUsd} USD ({PnlPct:F2}%)", symbol, entryPrice, exitPrice, pos.Quantity, decimal.Round(pnlUsd, 2), pnlPct);
         }
     }
