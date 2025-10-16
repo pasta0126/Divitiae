@@ -67,26 +67,26 @@ namespace Divitiae.Worker
                         decimal? changeAbs = prevClose.HasValue ? bar.Close - prevClose.Value : null;
                         decimal? changePct = prevClose.HasValue && prevClose.Value != 0 ? (bar.Close - prevClose.Value) / prevClose.Value * 100m : null;
 
-                        var decisionLabel = decision.Action switch
-                        {
-                            TradeAction.Buy => "[green]BUY[/]",
-                            TradeAction.Sell => "[red]SELL[/]",
-                            _ => "[yellow]HOLD[/]"
-                        };
-                        var notes = decision.Action == TradeAction.Hold ? decision.Reason : null;
+                        string decisionLabel = "[yellow]HOLD[/]";
+                        string? notes = null;
 
-                        _ui.AddSymbolRow(symbol, bar.Close, changeAbs, changePct, decisionLabel, notes);
-
-                        // Actions and file logs
                         if (decision.Action == TradeAction.Buy)
                         {
-                            await TryEnterLongAsync(symbol, decision, stoppingToken);
+                            var executed = await TryEnterLongAsync(symbol, decision, stoppingToken);
+                            decisionLabel = executed ? "[green]BUY[/]" : "[yellow]HOLD[/]";
                         }
                         else if (decision.Action == TradeAction.Sell)
                         {
-                            await TryExitLongAsync(symbol, stoppingToken);
+                            var executed = await TryExitLongAsync(symbol, stoppingToken);
+                            decisionLabel = executed ? "[red]SELL[/]" : "[yellow]HOLD[/]";
                         }
-                        // No HOLD logs
+                        else
+                        {
+                            // Strategy decided to hold
+                            notes = decision.Reason;
+                        }
+
+                        _ui.AddSymbolRow(symbol, bar.Close, changeAbs, changePct, decisionLabel, notes);
                     }
 
                     _ui.RenderSymbolsTable();
@@ -136,18 +136,18 @@ namespace Divitiae.Worker
             logger.LogWarning("CD start {Symbol} -> {Until}. reason={Reason}", symbol, until, reason);
         }
 
-        private async Task TryEnterLongAsync(string symbol, TradeDecision decision, CancellationToken ct)
+        private async Task<bool> TryEnterLongAsync(string symbol, TradeDecision decision, CancellationToken ct)
         {
             var opts = options.Value;
 
-            if (IsOnCooldown(symbol)) return;
+            if (IsOnCooldown(symbol)) return false;
 
             var hasPosition = await trading.HasOpenPositionAsync(symbol, ct);
             var hasOpenOrders = await trading.HasOpenOrdersAsync(symbol, ct);
             if (hasPosition || hasOpenOrders)
             {
                 // Skip silently
-                return;
+                return false;
             }
 
             var account = await trading.GetAccountAsync(ct);
@@ -158,9 +158,8 @@ namespace Divitiae.Worker
             var last = decision.ReferencePrice ?? barCache.GetLastClose(symbol) ?? 0m;
             if (account.BuyingPower < (decimal)opts.MinNotionalUsd || last <= 0)
             {
-                // Skip silently but start cooldown if funds are insufficient
                 if (account.BuyingPower < (decimal)opts.MinNotionalUsd) StartCooldown(symbol, "Insufficient buying power");
-                return;
+                return false;
             }
 
             try
@@ -179,21 +178,23 @@ namespace Divitiae.Worker
                 var entry = pos?.AvgEntryPrice > 0 ? pos!.AvgEntryPrice : last;
                 _ui.RenderBuy(symbol, entry, notional);
                 logger.LogInformation("BUY {Symbol}: entry={Entry} notional={Notional}", symbol, entry, notional);
+                return true;
             }
             catch (Exception ex)
             {
                 logger.LogError(ex, "BUY FAIL {Symbol}", symbol);
                 StartCooldown(symbol, "Order submission failure");
+                return false;
             }
         }
 
-        private async Task TryExitLongAsync(string symbol, CancellationToken ct)
+        private async Task<bool> TryExitLongAsync(string symbol, CancellationToken ct)
         {
             var pos = await trading.GetPositionAsync(symbol, ct);
             if (pos is null || pos.Quantity <= 0)
             {
                 // Skip silently
-                return;
+                return false;
             }
 
             await trading.ClosePositionAsync(symbol, ct);
@@ -205,6 +206,7 @@ namespace Divitiae.Worker
 
             _ui.RenderSell(symbol, entryPrice, exitPrice, pos.Quantity, decimal.Round(pnlUsd, 5), decimal.Round(pnlPct, 5));
             logger.LogInformation("SELL {Symbol}: entry={Entry} exit≈{Exit} qty={Qty} PnL={PnlUsd} USD ({PnlPct:F2}%)", symbol, entryPrice, exitPrice, pos.Quantity, decimal.Round(pnlUsd, 2), pnlPct);
+            return true;
         }
     }
 }
