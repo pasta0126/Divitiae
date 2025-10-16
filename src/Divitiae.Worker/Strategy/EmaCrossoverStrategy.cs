@@ -4,22 +4,15 @@ using Microsoft.Extensions.Options;
 
 namespace Divitiae.Worker.Strategy
 {
-    public class EmaCrossoverStrategy : IStrategy
+    public class EmaCrossoverStrategy(IOptions<AlpacaOptions> options, ILogger<EmaCrossoverStrategy> logger) : IStrategy
     {
-        private readonly AlpacaOptions _options;
-        private readonly ILogger<EmaCrossoverStrategy> _logger;
-
-        public EmaCrossoverStrategy(IOptions<AlpacaOptions> options, ILogger<EmaCrossoverStrategy> logger)
-        {
-            _options = options.Value;
-            _logger = logger;
-        }
+        private readonly AlpacaOptions _options = options.Value;
 
         public TradeDecision Evaluate(string symbol, IReadOnlyList<Bar> bars)
         {
             if (bars.Count < Math.Max(_options.EmaShortPeriod, _options.EmaLongPeriod) + 2)
             {
-                return new TradeDecision { Action = TradeAction.Hold, Reason = "Insufficient bars" };
+                return new TradeDecision { Action = TradeAction.Hold, Reason = "Insufficient bars", LastClose = bars.LastOrDefault()?.Close };
             }
 
             var closes = bars.Select(b => b.Close).ToList();
@@ -32,22 +25,18 @@ namespace Divitiae.Worker.Strategy
             var currShort = emaS[^1];
             var currLong = emaL[^1];
 
-            _logger.LogDebug("EMA snapshot {Symbol}: close={Close} ema{Short}={EmaS} ema{Long}={EmaL}", symbol, last, _options.EmaShortPeriod, currShort, _options.EmaLongPeriod, currLong);
-
             var prevCrossUp = prevShort <= prevLong && currShort > currLong;
             var prevCrossDown = prevShort >= prevLong && currShort < currLong;
 
             if (prevCrossUp)
             {
-                _logger.LogInformation("BUY signal {Symbol}: EMA{Short} crossed above EMA{Long}", symbol, _options.EmaShortPeriod, _options.EmaLongPeriod);
-                return new TradeDecision { Action = TradeAction.Buy, ReferencePrice = last, Reason = "EMA short crossed above EMA long" };
+                return new TradeDecision { Action = TradeAction.Buy, ReferencePrice = last, Reason = $"EMA{_options.EmaShortPeriod} crossed above EMA{_options.EmaLongPeriod}", LastClose = last, EmaShort = currShort, EmaLong = currLong };
             }
             if (prevCrossDown)
             {
-                _logger.LogInformation("SELL signal {Symbol}: EMA{Short} crossed below EMA{Long}", symbol, _options.EmaShortPeriod, _options.EmaLongPeriod);
-                return new TradeDecision { Action = TradeAction.Sell, ReferencePrice = last, Reason = "EMA short crossed below EMA long" };
+                return new TradeDecision { Action = TradeAction.Sell, ReferencePrice = last, Reason = $"EMA{_options.EmaShortPeriod} crossed below EMA{_options.EmaLongPeriod}", LastClose = last, EmaShort = currShort, EmaLong = currLong };
             }
-            return new TradeDecision { Action = TradeAction.Hold };
+            return new TradeDecision { Action = TradeAction.Hold, Reason = "No crossover", LastClose = last, EmaShort = currShort, EmaLong = currLong };
         }
 
         private static List<decimal> Ema(List<decimal> values, int period)

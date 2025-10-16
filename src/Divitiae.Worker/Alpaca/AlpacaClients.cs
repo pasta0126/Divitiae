@@ -106,7 +106,6 @@ namespace Divitiae.Worker.Alpaca
         {
             var acc = await _http.GetFromJsonAsync<Account>("account", JsonCfg.Options, ct);
             if (acc is null) throw new InvalidOperationException("Cannot fetch account");
-            _logger.LogDebug("Account snapshot: equity={Equity} buyingPower={BuyingPower} currency={Currency}", acc.Equity, acc.BuyingPower, acc.Currency);
             return acc;
         }
 
@@ -115,12 +114,22 @@ namespace Divitiae.Worker.Alpaca
             var resp = await _http.GetAsync($"positions/{symbol}", ct);
             if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
-                _logger.LogDebug("No open position for {Symbol}", symbol);
                 return false;
             }
             resp.EnsureSuccessStatusCode();
-            _logger.LogDebug("Open position exists for {Symbol}", symbol);
             return true;
+        }
+
+        public async Task<Position?> GetPositionAsync(string symbol, CancellationToken ct)
+        {
+            var resp = await _http.GetAsync($"positions/{symbol}", ct);
+            if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                return null;
+            }
+            resp.EnsureSuccessStatusCode();
+            var pos = await resp.Content.ReadFromJsonAsync<Position>(JsonCfg.Options, ct);
+            return pos;
         }
 
         public async Task<bool> HasOpenOrdersAsync(string symbol, CancellationToken ct)
@@ -130,7 +139,6 @@ namespace Divitiae.Worker.Alpaca
             if (doc.ValueKind == JsonValueKind.Array)
             {
                 var count = doc.GetArrayLength();
-                _logger.LogDebug("Open orders for {Symbol}: {Count}", symbol, count);
                 return count > 0;
             }
             return false;
@@ -138,11 +146,7 @@ namespace Divitiae.Worker.Alpaca
 
         public async Task SubmitBracketOrderNotionalAsync(BracketOrderRequest request, CancellationToken ct)
         {
-            // Prefer trailing stop if configured, else fixed stop loss
-            object stopLoss = _opts.TrailingStopPercent > 0
-                ? new { trail_percent = (decimal)_opts.TrailingStopPercent }
-                : new { stop_price = request.StopLossStopPrice };
-
+            // Alpaca brackets require fixed stop_loss.stop_price, trailing is not supported here.
             var body = new
             {
                 symbol = request.Symbol,
@@ -152,10 +156,9 @@ namespace Divitiae.Worker.Alpaca
                 notional = request.NotionalUsd,
                 order_class = "bracket",
                 take_profit = new { limit_price = request.TakeProfitLimitPrice },
-                stop_loss = stopLoss
+                stop_loss = new { stop_price = request.StopLossStopPrice }
             };
 
-            _logger.LogInformation("POST /orders {Symbol} side={Side} tif={TIF} notional={Notional} tp={TP} sl/trail={SL}", request.Symbol, request.Side, request.TimeInForce, request.NotionalUsd, request.TakeProfitLimitPrice, _opts.TrailingStopPercent > 0 ? $"trail%={(decimal)_opts.TrailingStopPercent}" : request.StopLossStopPrice);
             var resp = await _http.PostAsJsonAsync("orders", body, JsonCfg.Options, ct);
             if (!resp.IsSuccessStatusCode)
             {
@@ -163,15 +166,10 @@ namespace Divitiae.Worker.Alpaca
                 _logger.LogError("Order submit failed: {Status} {Body}", resp.StatusCode, content);
                 resp.EnsureSuccessStatusCode();
             }
-            else
-            {
-                _logger.LogInformation("Order submitted successfully for {Symbol}", request.Symbol);
-            }
         }
 
         public async Task ClosePositionAsync(string symbol, CancellationToken ct)
         {
-            _logger.LogInformation("DELETE /positions/{Symbol}", symbol);
             var resp = await _http.DeleteAsync($"positions/{symbol}", ct);
             if (!resp.IsSuccessStatusCode)
             {
@@ -179,21 +177,14 @@ namespace Divitiae.Worker.Alpaca
                 _logger.LogError("Close position failed: {Status} {Body}", resp.StatusCode, content);
                 resp.EnsureSuccessStatusCode();
             }
-            else
-            {
-                _logger.LogInformation("Position close request sent for {Symbol}", symbol);
-            }
         }
 
         public async Task<bool> IsMarketOpenAsync(CancellationToken ct)
         {
-            // Alpaca clock endpoint: GET /v2/clock
             var doc = await _http.GetFromJsonAsync<JsonElement>("clock", JsonCfg.Options, ct);
-            if (doc.ValueKind != JsonValueKind.Object) return true; // fallback
-            if (doc.TryGetProperty("is_open", out var openEl) && openEl.ValueKind == JsonValueKind.True)
-                return true;
-            if (doc.TryGetProperty("is_open", out openEl) && openEl.ValueKind == JsonValueKind.False)
-                return false;
+            if (doc.ValueKind != JsonValueKind.Object) return true;
+            if (doc.TryGetProperty("is_open", out var openEl) && openEl.ValueKind == JsonValueKind.True) return true;
+            if (doc.TryGetProperty("is_open", out openEl) && openEl.ValueKind == JsonValueKind.False) return false;
             return true;
         }
     }

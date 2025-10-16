@@ -22,36 +22,46 @@ namespace Divitiae.Worker
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             var opts = options.Value;
-            logger.LogInformation("Starting Alpaca worker for symbols: {Symbols}", string.Join(",", opts.Symbols));
+            logger.LogInformation("Cycle start: symbols=[{Symbols}]", string.Join(",", opts.Symbols));
 
-            // Preload bars
+            // Preload bars once at startup (noisy details suppressed)
             foreach (var symbol in opts.Symbols)
             {
-                logger.LogDebug("Seeding bars for {Symbol} (limit={Limit})", symbol, opts.BarsSeed);
                 var seedBars = await marketData.GetMinuteBarsAsync(symbol, opts.BarsSeed, stoppingToken);
                 barCache.Seed(symbol, seedBars);
             }
 
             while (!stoppingToken.IsCancellationRequested)
             {
+                var cycleStart = clock.UtcNow;
                 try
                 {
-                    // Heartbeat / market open gate
                     var marketOpen = await trading.IsMarketOpenAsync(stoppingToken);
+                    logger.LogInformation("Market {State} at {Time}", marketOpen ? "OPEN" : "CLOSED", cycleStart);
                     if (!marketOpen)
                     {
-                        logger.LogInformation("Market closed. Heartbeat at {Now} UTC", clock.UtcNow);
                         await Task.Delay(TimeSpan.FromSeconds(opts.PollingIntervalSeconds), stoppingToken);
+                        logger.LogInformation("Cycle end: market closed (duration {Dur} ms)", (int)(clock.UtcNow - cycleStart).TotalMilliseconds);
                         continue;
                     }
 
                     foreach (var symbol in opts.Symbols)
                     {
-                        var newBar = await marketData.GetLatestMinuteBarAsync(symbol, stoppingToken);
-                        if (newBar == null) continue;
-                        barCache.Add(symbol, newBar);
+                        var bar = await marketData.GetLatestMinuteBarAsync(symbol, stoppingToken);
+                        if (bar is null) continue;
+                        barCache.Add(symbol, bar);
 
                         var decision = strategy.Evaluate(symbol, barCache.Get(symbol));
+
+                        // Price change info from previous close if available
+                        var prevClose = barCache.Get(symbol).Count > 1 ? barCache.Get(symbol)[^2].Close : (decimal?)null;
+                        decimal? changePct = prevClose.HasValue && prevClose.Value != 0 ? (bar.Close - prevClose.Value) / prevClose.Value * 100m : null;
+
+                        logger.LogInformation("Checked {Symbol}: close={Close} {Delta}",
+                            symbol,
+                            bar.Close,
+                            changePct.HasValue ? $"change={changePct.Value:F2}%" : "change=n/a");
+
                         if (decision.Action == TradeAction.Buy)
                         {
                             await TryEnterLongAsync(symbol, decision, stoppingToken);
@@ -60,11 +70,23 @@ namespace Divitiae.Worker
                         {
                             await TryExitLongAsync(symbol, stoppingToken);
                         }
+                        else
+                        {
+                            // HOLD diagnostics
+                            if (decision.LastClose.HasValue && decision.EmaShort.HasValue && decision.EmaLong.HasValue)
+                            {
+                                logger.LogInformation("HOLD {Symbol}: price={P} emaS={S} emaL={L} reason={Reason}", symbol, decision.LastClose.Value, decision.EmaShort.Value, decision.EmaLong.Value, decision.Reason ?? "");
+                            }
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
-                    logger.LogError(ex, "Error in main loop");
+                    logger.LogError(ex, "Error in cycle");
+                }
+                finally
+                {
+                    logger.LogInformation("Cycle end (duration {Dur} ms)", (int)(clock.UtcNow - cycleStart).TotalMilliseconds);
                 }
 
                 await Task.Delay(TimeSpan.FromSeconds(opts.PollingIntervalSeconds), stoppingToken);
@@ -77,7 +99,7 @@ namespace Divitiae.Worker
             {
                 if (clock.UtcNow < until)
                 {
-                    logger.LogInformation("Skip enter for {Symbol}; cooldown until {Until}", symbol, until);
+                    logger.LogInformation("CD {Symbol} until {Until}", symbol, until);
                     return true;
                 }
                 _cooldownUntil.Remove(symbol);
@@ -89,7 +111,7 @@ namespace Divitiae.Worker
         {
             var until = clock.UtcNow.Add(InsufficientFundsCooldown);
             _cooldownUntil[symbol] = until;
-            logger.LogWarning("Cooldown {Symbol} until {Until}. Reason: {Reason}", symbol, until, reason);
+            logger.LogWarning("CD start {Symbol} -> {Until}. reason={Reason}", symbol, until, reason);
         }
 
         private async Task TryEnterLongAsync(string symbol, TradeDecision decision, CancellationToken ct)
@@ -100,27 +122,22 @@ namespace Divitiae.Worker
 
             var hasPosition = await trading.HasOpenPositionAsync(symbol, ct);
             var hasOpenOrders = await trading.HasOpenOrdersAsync(symbol, ct);
-            logger.LogInformation("Pre-checks {Symbol}: pos={HasPos} orders={HasOrd}", symbol, hasPosition, hasOpenOrders);
-
-            if (hasPosition || hasOpenOrders) return;
-
-            var account = await trading.GetAccountAsync(ct);
-
-            // Determine target notional based on equity and configured fraction, but cap by available buying power
-            var target = Math.Max(account.Equity * (decimal)opts.PositionNotionalFraction, (decimal)opts.MinNotionalUsd);
-            var notional = Math.Min(account.BuyingPower, target);
-
-            if (account.BuyingPower < (decimal)opts.MinNotionalUsd)
+            if (hasPosition || hasOpenOrders)
             {
-                logger.LogInformation("Insufficient buying power {BP} < {Min} for {Symbol}", account.BuyingPower, (decimal)opts.MinNotionalUsd, symbol);
-                StartCooldown(symbol, "Insufficient buying power");
+                logger.LogInformation("Skip BUY {Symbol}: pos={Pos} ord={Ord}", symbol, hasPosition, hasOpenOrders);
                 return;
             }
 
+            var account = await trading.GetAccountAsync(ct);
+
+            var target = Math.Max(account.Equity * (decimal)opts.PositionNotionalFraction, (decimal)opts.MinNotionalUsd);
+            var notional = Math.Min(account.BuyingPower, target);
+
             var last = decision.ReferencePrice ?? barCache.GetLastClose(symbol) ?? 0m;
-            if (last <= 0)
+            if (account.BuyingPower < (decimal)opts.MinNotionalUsd || last <= 0)
             {
-                logger.LogWarning("Cannot price entry for {Symbol}", symbol);
+                logger.LogInformation("Skip BUY {Symbol}: bp={BP} min={Min} price={Price}", symbol, account.BuyingPower, (decimal)opts.MinNotionalUsd, last);
+                if (account.BuyingPower < (decimal)opts.MinNotionalUsd) StartCooldown(symbol, "Insufficient buying power");
                 return;
             }
 
@@ -139,27 +156,36 @@ namespace Divitiae.Worker
                     TimeInForce = opts.TimeInForce
                 }, ct);
 
-                logger.LogInformation("BUY submitted {Symbol}: notional={Notional} last={Last} tp={TP} sl/trail%={Trail}",
-                    symbol, notional, last, decimal.Round(tp, 2), options.Value.TrailingStopPercent > 0 ? (decimal?)options.Value.TrailingStopPercent : null);
+                // Try to fetch fresh position snapshot after order (may still be pending)
+                var pos = await trading.GetPositionAsync(symbol, ct);
+                var entry = pos?.AvgEntryPrice > 0 ? pos!.AvgEntryPrice : last;
+                logger.LogInformation("BUY {Symbol}: entry={Entry} notional={Notional} tp={TP} trail%={Trail}", symbol, entry, notional, decimal.Round(tp, 2), options.Value.TrailingStopPercent);
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Order submit failed for {Symbol}; cooldown", symbol);
+                logger.LogError(ex, "BUY FAIL {Symbol}", symbol);
                 StartCooldown(symbol, "Order submission failure");
             }
         }
 
         private async Task TryExitLongAsync(string symbol, CancellationToken ct)
         {
-            var inPosition = await trading.HasOpenPositionAsync(symbol, ct);
-            if (!inPosition)
+            var pos = await trading.GetPositionAsync(symbol, ct);
+            if (pos is null || pos.Quantity <= 0)
             {
-                logger.LogInformation("Skip exit; no position for {Symbol}", symbol);
+                logger.LogInformation("Skip SELL {Symbol}: no position", symbol);
                 return;
             }
 
-            logger.LogInformation("Flatten {Symbol}", symbol);
             await trading.ClosePositionAsync(symbol, ct);
+
+            // After close, we may not immediately know fill price; log with current and entry to estimate
+            var exitPrice = pos.CurrentPrice;
+            var entryPrice = pos.AvgEntryPrice;
+            var pnlUsd = (exitPrice - entryPrice) * pos.Quantity;
+            var pnlPct = entryPrice != 0 ? (exitPrice - entryPrice) / entryPrice * 100m : 0m;
+
+            logger.LogInformation("SELL {Symbol}: entry={Entry} exit?{Exit} qty={Qty} PnL={PnlUsd} USD ({PnlPct:F2}%)", symbol, entryPrice, exitPrice, pos.Quantity, decimal.Round(pnlUsd, 2), pnlPct);
         }
     }
 }

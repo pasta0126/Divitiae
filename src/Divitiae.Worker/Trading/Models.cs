@@ -30,10 +30,12 @@ namespace Divitiae.Worker.Trading
 
     public record Position
     {
-        public string Symbol { get; init; } = string.Empty;
-        public decimal Quantity { get; init; }
-        public decimal MarketValue { get; init; }
-        public string Side { get; init; } = string.Empty;
+        [JsonPropertyName("symbol")] public string Symbol { get; init; } = string.Empty;
+        [JsonPropertyName("qty")] [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] public decimal Quantity { get; init; }
+        [JsonPropertyName("avg_entry_price")] [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] public decimal AvgEntryPrice { get; init; }
+        [JsonPropertyName("current_price")] [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] public decimal CurrentPrice { get; init; }
+        [JsonPropertyName("market_value")] [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] public decimal MarketValue { get; init; }
+        [JsonPropertyName("side")] public string Side { get; init; } = string.Empty;
     }
 
     public record Bar
@@ -54,6 +56,7 @@ namespace Divitiae.Worker.Trading
         Task SubmitBracketOrderNotionalAsync(BracketOrderRequest request, CancellationToken ct);
         Task ClosePositionAsync(string symbol, CancellationToken ct);
         Task<bool> IsMarketOpenAsync(CancellationToken ct);
+        Task<Position?> GetPositionAsync(string symbol, CancellationToken ct);
     }
 
     public interface IAlpacaMarketDataClient
