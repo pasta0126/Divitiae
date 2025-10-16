@@ -18,6 +18,7 @@ builder.Logging.AddSerilog(Log.Logger, dispose: true);
 
 // Bind configuration
 builder.Services.Configure<AlpacaOptions>(builder.Configuration.GetSection("Alpaca"));
+builder.Services.Configure<WorkerOptions>(builder.Configuration.GetSection("Worker"));
 
 // Http clients for Alpaca endpoints
 builder.Services.AddHttpClient("alpaca-trading", (sp, client) =>
