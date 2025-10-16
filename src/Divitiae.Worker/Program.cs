@@ -3,7 +3,6 @@ using Divitiae.Worker.Alpaca;
 using Divitiae.Worker.Config;
 using Divitiae.Worker.Strategy;
 using Divitiae.Worker.Trading;
-using Microsoft.Extensions.DependencyInjection;
 using Serilog;
 
 var builder = Host.CreateApplicationBuilder(args);

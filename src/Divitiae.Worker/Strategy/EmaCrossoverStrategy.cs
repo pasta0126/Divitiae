@@ -1,6 +1,5 @@
 using Divitiae.Worker.Config;
 using Divitiae.Worker.Trading;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Divitiae.Worker.Strategy
