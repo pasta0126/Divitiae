@@ -61,21 +61,50 @@ flowchart TD
     F -.-> Clk
 ```
 
-### Relevant Configuration Parameters (`AlpacaOptions`)
+## Configuration
 
-- `Symbols`: list of symbols to scan/trade.
-- `BarsSeed`: number of initial bars for preload.
-- `PollingIntervalSeconds`: interval of the polling loop.
-- `MarketDataFeed`: data feed for market data.
-- `PositionNotionalFraction` and `MinNotionalUsd`: entry notional calculation.
-- `TakeProfitPercent` and `StopLossPercent`: bracket levels.
-- `TimeInForce`: TIF for orders.
+Alpaca configuration is bound to `AlpacaOptions` and read from `appsettings.json` (and overrides via environment variables or secrets). When the market is closed, the worker skips symbol processing and waits 15 minutes before the next cycle; when open, it uses `PollingIntervalSeconds`.
 
-### Key Components
+### AlpacaOptions fields
 
-- `Worker` (BackgroundService): orchestrates the flow.
-- `AlpacaMarketDataClient`: gets 1m bars and latest bars.
-- `BarCache`: stores and trims bars by symbol.
-- `IStrategy` (`EmaCrossoverStrategy`): decides `Hold/Buy/Sell`.
-- `AlpacaTradingClient`: queries account, positions/orders and sends bracket/close orders.
-- `IClock`: temporal reference for loop timing.
+- `ApiKeyId` : Alpaca API Key ID. Do not store in `appsettings.json`.
+- `ApiSecretKey` : Alpaca API Secret Key. Do not store in `appsettings.json`.
+- `TradingApiBaseUrl`: Trading API base URL (paper/live). Example: `https://paper-api.alpaca.markets`.
+- `MarketDataApiBaseUrl`: Market data API base URL. Example: `https://data.alpaca.markets`.
+- `MarketDataFeed`: Market data feed. `iex` (free) or `sip` (paid).
+- `Symbols`: Array of symbols to scan/trade.
+- `EmaShortPeriod`: Short EMA period used by the strategy.
+- `EmaLongPeriod`: Long EMA period used by the strategy.
+- `PositionNotionalFraction`: Fraction of account equity to aim for when entering a position (0.10 = 10%).
+- `MinNotionalUsd`: Minimum notional in USD for any order.
+- `TakeProfitPercent`: Take-profit percent (0.02 = +2%).
+- `StopLossPercent`: Stop-loss percent (0.01 = -1%).
+- `TrailingStopPercent`: Trailing stop percent for protective exits.
+- `PollingIntervalSeconds`: Polling cadence while market is open.
+- `BarsSeed`: Number of 1-minute bars to preload per symbol on startup.
+- `TimeInForce`: Order time-in-force, e.g. `gtc`, `day`.
+
+### JSON example (appsettings.json)
+
+```json
+{
+  "Alpaca": {
+    "ApiKeyId": "API_KEY_ID",
+    "ApiSecretKey": "API_SECRET_KEY",
+    "TradingApiBaseUrl": "https://paper-api.alpaca.markets",
+    "MarketDataApiBaseUrl": "https://data.alpaca.markets",
+    "MarketDataFeed": "iex",
+    "Symbols": [ "AAPL", "MSFT", "SPY" ],
+    "EmaShortPeriod": 5,
+    "EmaLongPeriod": 20,
+    "PositionNotionalFraction": 0.10,
+    "MinNotionalUsd": 1.0,
+    "TakeProfitPercent": 0.02,
+    "StopLossPercent": 0.01,
+    "TrailingStopPercent": 0.01,
+    "PollingIntervalSeconds": 15,
+    "BarsSeed": 100,
+    "TimeInForce": "gtc"
+  }
+}
+```
