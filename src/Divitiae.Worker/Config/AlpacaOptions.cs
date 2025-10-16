@@ -14,6 +14,7 @@ namespace Divitiae.Worker.Config
         public double MinNotionalUsd { get; set; } = 1.0;
         public double TakeProfitPercent { get; set; } = 0.02;
         public double StopLossPercent { get; set; } = 0.01;
+        public double TrailingStopPercent { get; set; } = 0.01; // Nuevo: porcentaje de trailing stop nativo
         public int PollingIntervalSeconds { get; set; } = 15;
         public int BarsSeed { get; set; } = 100;
         public string TimeInForce { get; set; } = "gtc";

@@ -43,6 +43,7 @@ builder.Services.AddHttpClient("alpaca-marketdata", (sp, client) =>
 // Clients
 builder.Services.AddSingleton<IAlpacaAssetClient, AlpacaAssetClient>();
 builder.Services.AddSingleton<IAlpacaMarketDataClient, AlpacaMarketDataClient>();
+builder.Services.AddSingleton<IAlpacaTradingClient, AlpacaTradingClient>();
 
 var app = builder.Build();
 

@@ -138,6 +138,11 @@ namespace Divitiae.Worker.Alpaca
 
         public async Task SubmitBracketOrderNotionalAsync(BracketOrderRequest request, CancellationToken ct)
         {
+            // Prefer trailing stop if configured, else fixed stop loss
+            object stopLoss = _opts.TrailingStopPercent > 0
+                ? new { trail_percent = (decimal)_opts.TrailingStopPercent }
+                : new { stop_price = request.StopLossStopPrice };
+
             var body = new
             {
                 symbol = request.Symbol,
@@ -147,10 +152,10 @@ namespace Divitiae.Worker.Alpaca
                 notional = request.NotionalUsd,
                 order_class = "bracket",
                 take_profit = new { limit_price = request.TakeProfitLimitPrice },
-                stop_loss = new { stop_price = request.StopLossStopPrice }
+                stop_loss = stopLoss
             };
 
-            _logger.LogInformation("POST /orders {Symbol} side={Side} tif={TIF} notional={Notional} tp={TP} sl={SL}", request.Symbol, request.Side, request.TimeInForce, request.NotionalUsd, request.TakeProfitLimitPrice, request.StopLossStopPrice);
+            _logger.LogInformation("POST /orders {Symbol} side={Side} tif={TIF} notional={Notional} tp={TP} sl/trail={SL}", request.Symbol, request.Side, request.TimeInForce, request.NotionalUsd, request.TakeProfitLimitPrice, _opts.TrailingStopPercent > 0 ? $"trail%={(decimal)_opts.TrailingStopPercent}" : request.StopLossStopPrice);
             var resp = await _http.PostAsJsonAsync("orders", body, JsonCfg.Options, ct);
             if (!resp.IsSuccessStatusCode)
             {
