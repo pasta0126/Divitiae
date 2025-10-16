@@ -1,5 +1,7 @@
 namespace Divitiae.Worker.Trading
 {
+    using System.Text.Json.Serialization;
+
     public enum OrderSide { Buy, Sell }
 
     public record BracketOrderRequest
@@ -14,8 +16,15 @@ namespace Divitiae.Worker.Trading
 
     public record Account
     {
+        [JsonPropertyName("buying_power")]
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
         public decimal BuyingPower { get; init; }
+
+        [JsonPropertyName("equity")]
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
         public decimal Equity { get; init; }
+
+        [JsonPropertyName("currency")]
         public string Currency { get; init; } = "USD";
     }
 

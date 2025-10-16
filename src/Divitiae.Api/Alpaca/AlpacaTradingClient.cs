@@ -13,22 +13,11 @@ namespace Divitiae.Api.Alpaca
         };
     }
 
-    public record Account
+    public record MarketClock
     {
-        public decimal BuyingPower { get; init; }
-        public decimal Equity { get; init; }
-        public string Currency { get; init; } = "USD";
-    }
-
-    public record Position
-    {
-        public string Symbol { get; init; } = string.Empty;
-        public decimal Quantity { get; init; }
-        public decimal AvgEntryPrice { get; init; }
-        public decimal CurrentPrice { get; init; }
-        public decimal MarketValue { get; init; }
-        public decimal UnrealizedPl { get; init; }
-        public string Side { get; init; } = string.Empty;
+        public bool IsOpen { get; init; }
+        public DateTime? NextOpen { get; init; }
+        public DateTime? NextClose { get; init; }
     }
 
     public interface IAlpacaTradingClient
@@ -36,6 +25,8 @@ namespace Divitiae.Api.Alpaca
         Task<Account> GetAccountAsync(CancellationToken ct);
         Task<IReadOnlyList<Position>> GetPositionsAsync(CancellationToken ct);
         Task ClosePositionAsync(string symbol, CancellationToken ct);
+        Task<MarketClock> GetClockAsync(CancellationToken ct);
+        Task<bool> IsMarketOpenAsync(CancellationToken ct);
     }
 
     public class AlpacaTradingClient : IAlpacaTradingClient
@@ -64,32 +55,8 @@ namespace Divitiae.Api.Alpaca
                 return Array.Empty<Position>();
             }
             resp.EnsureSuccessStatusCode();
-            var json = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonCfgTrading.Options, ct);
-            var list = new List<Position>();
-            if (json.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var el in json.EnumerateArray())
-                {
-                    try
-                    {
-                        list.Add(new Position
-                        {
-                            Symbol = el.TryGetProperty("symbol", out var s) ? (s.GetString() ?? string.Empty) : string.Empty,
-                            Quantity = el.TryGetProperty("qty", out var q) ? decimal.Parse(q.GetString() ?? "0", System.Globalization.CultureInfo.InvariantCulture) : 0m,
-                            AvgEntryPrice = el.TryGetProperty("avg_entry_price", out var a) ? decimal.Parse(a.GetString() ?? "0", System.Globalization.CultureInfo.InvariantCulture) : 0m,
-                            CurrentPrice = el.TryGetProperty("current_price", out var cp) ? decimal.Parse(cp.GetString() ?? "0", System.Globalization.CultureInfo.InvariantCulture) : 0m,
-                            MarketValue = el.TryGetProperty("market_value", out var mv) ? decimal.Parse(mv.GetString() ?? "0", System.Globalization.CultureInfo.InvariantCulture) : 0m,
-                            UnrealizedPl = el.TryGetProperty("unrealized_pl", out var pl) ? decimal.Parse(pl.GetString() ?? "0", System.Globalization.CultureInfo.InvariantCulture) : 0m,
-                            Side = el.TryGetProperty("side", out var sd) ? (sd.GetString() ?? string.Empty) : string.Empty
-                        });
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Failed to parse position element: {Element}", el.ToString());
-                    }
-                }
-            }
-            return list;
+            var json = await resp.Content.ReadFromJsonAsync<Position[]>(JsonCfgTrading.Options, ct);
+            return json ?? Array.Empty<Position>();
         }
 
         public async Task ClosePositionAsync(string symbol, CancellationToken ct)
@@ -102,6 +69,28 @@ namespace Divitiae.Api.Alpaca
                 _logger.LogWarning("Close position failed for {Symbol}: {Status} {Body}", symbol, resp.StatusCode, body);
                 resp.EnsureSuccessStatusCode();
             }
+        }
+
+        public async Task<MarketClock> GetClockAsync(CancellationToken ct)
+        {
+            var doc = await _http.GetFromJsonAsync<JsonElement>("clock", JsonCfgTrading.Options, ct);
+            bool isOpen = false; DateTime? nextOpen = null; DateTime? nextClose = null;
+            if (doc.ValueKind == JsonValueKind.Object)
+            {
+                if (doc.TryGetProperty("is_open", out var openEl))
+                    isOpen = openEl.ValueKind == JsonValueKind.True;
+                if (doc.TryGetProperty("next_open", out var no) && no.ValueKind == JsonValueKind.String && DateTime.TryParse(no.GetString(), out var dtNo))
+                    nextOpen = dtNo;
+                if (doc.TryGetProperty("next_close", out var nc) && nc.ValueKind == JsonValueKind.String && DateTime.TryParse(nc.GetString(), out var dtNc))
+                    nextClose = dtNc;
+            }
+            return new MarketClock { IsOpen = isOpen, NextOpen = nextOpen, NextClose = nextClose };
+        }
+
+        public async Task<bool> IsMarketOpenAsync(CancellationToken ct)
+        {
+            var c = await GetClockAsync(ct);
+            return c.IsOpen;
         }
     }
 }

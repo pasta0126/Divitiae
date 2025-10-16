@@ -30,39 +30,35 @@ namespace Divitiae.Worker
                 logger.LogDebug("Seeding bars for {Symbol} (limit={Limit})", symbol, opts.BarsSeed);
                 var seedBars = await marketData.GetMinuteBarsAsync(symbol, opts.BarsSeed, stoppingToken);
                 barCache.Seed(symbol, seedBars);
-                if (seedBars.Count > 0)
-                {
-                    var first = seedBars.First();
-                    var last = seedBars.Last();
-                    logger.LogDebug("Seeded {Count} bars for {Symbol} from {Start} to {End}", seedBars.Count, symbol, first.Time, last.Time);
-                }
-                else
-                {
-                    logger.LogWarning("No seed bars received for {Symbol}", symbol);
-                }
             }
 
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
                 {
+                    // Heartbeat / market open gate
+                    var marketOpen = await trading.IsMarketOpenAsync(stoppingToken);
+                    if (!marketOpen)
+                    {
+                        logger.LogInformation("Market closed. Heartbeat at {Now} UTC", clock.UtcNow);
+                        await Task.Delay(TimeSpan.FromSeconds(opts.PollingIntervalSeconds), stoppingToken);
+                        continue;
+                    }
+
                     foreach (var symbol in opts.Symbols)
                     {
                         var newBar = await marketData.GetLatestMinuteBarAsync(symbol, stoppingToken);
-                        if (newBar != null)
-                        {
-                            barCache.Add(symbol, newBar);
-                            logger.LogDebug("1m bar {Symbol} {Time} O={O} H={H} L={L} C={C} V={V}", symbol, newBar.Time, newBar.Open, newBar.High, newBar.Low, newBar.Close, newBar.Volume);
+                        if (newBar == null) continue;
+                        barCache.Add(symbol, newBar);
 
-                            var decision = strategy.Evaluate(symbol, barCache.Get(symbol));
-                            if (decision.Action == TradeAction.Buy)
-                            {
-                                await TryEnterLongAsync(symbol, decision, stoppingToken);
-                            }
-                            else if (decision.Action == TradeAction.Sell)
-                            {
-                                await TryExitLongAsync(symbol, stoppingToken);
-                            }
+                        var decision = strategy.Evaluate(symbol, barCache.Get(symbol));
+                        if (decision.Action == TradeAction.Buy)
+                        {
+                            await TryEnterLongAsync(symbol, decision, stoppingToken);
+                        }
+                        else if (decision.Action == TradeAction.Sell)
+                        {
+                            await TryExitLongAsync(symbol, stoppingToken);
                         }
                     }
                 }
@@ -101,14 +97,6 @@ namespace Divitiae.Worker
             var opts = options.Value;
 
             if (IsOnCooldown(symbol)) return;
-
-            // Market open check
-            var marketOpen = await trading.IsMarketOpenAsync(ct);
-            if (!marketOpen)
-            {
-                logger.LogInformation("Market closed. Skip buy for {Symbol}", symbol);
-                return;
-            }
 
             var hasPosition = await trading.HasOpenPositionAsync(symbol, ct);
             var hasOpenOrders = await trading.HasOpenOrdersAsync(symbol, ct);
