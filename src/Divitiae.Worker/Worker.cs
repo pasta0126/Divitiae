@@ -73,15 +73,15 @@ namespace Divitiae.Worker
                         {
                             await TryExitLongAsync(symbol, stoppingToken);
                         }
-                        else
+                        else if (decision.Action == TradeAction.Hold && decision.LastClose.HasValue && decision.EmaShort.HasValue && decision.EmaLong.HasValue)
                         {
-                            // HOLD diagnostics
-                            if (decision.LastClose.HasValue && decision.EmaShort.HasValue && decision.EmaLong.HasValue)
-                            {
-                                logger.LogInformation("HOLD {Symbol}: price={P} emaS={S} emaL={L} reason={Reason}", symbol, decision.LastClose.Value, decision.EmaShort.Value, decision.EmaLong.Value, decision.Reason ?? "");
-                            }
+                            logger.LogInformation("HOLD {Symbol}: price={P} emaS={S} emaL={L} reason={Reason}", symbol, decision.LastClose.Value, decision.EmaShort.Value, decision.EmaLong.Value, decision.Reason ?? "");
                         }
                     }
+                }
+                catch (TaskCanceledException)
+                {
+                    // benign cancellation due to HTTP timeouts or shutdown
                 }
                 catch (Exception ex)
                 {
@@ -144,17 +144,6 @@ namespace Divitiae.Worker
                 return;
             }
 
-            // Compute TP/SL with exchange constraints safeguards
-            var tp = last * (1m + (decimal)opts.TakeProfitPercent);
-            var sl = last * (1m - (decimal)opts.StopLossPercent);
-            tp = Ceil2(tp);
-            sl = Floor2(sl);
-            var tpMin = Ceil2(last) + 0.01m; // TP must be at least 1 cent above base
-            var slMax = Floor2(last) - 0.01m; // SL must be at least 1 cent below base
-            if (tp < tpMin) tp = tpMin;
-            if (sl > slMax) sl = slMax;
-            if (sl <= 0) sl = 0.01m;
-
             try
             {
                 await trading.SubmitBracketOrderNotionalAsync(new BracketOrderRequest
@@ -162,15 +151,15 @@ namespace Divitiae.Worker
                     Symbol = symbol,
                     Side = OrderSide.Buy,
                     NotionalUsd = decimal.Round(notional, 2),
-                    TakeProfitLimitPrice = tp,
-                    StopLossStopPrice = sl,
-                    TimeInForce = opts.TimeInForce
+                    TakeProfitLimitPrice = 0, // ignored in simple order
+                    StopLossStopPrice = 0,    // ignored in simple order
+                    TimeInForce = "day"
                 }, ct);
 
                 // Try to fetch fresh position snapshot after order (may still be pending)
                 var pos = await trading.GetPositionAsync(symbol, ct);
                 var entry = pos?.AvgEntryPrice > 0 ? pos!.AvgEntryPrice : last;
-                logger.LogInformation("BUY {Symbol}: entry={Entry} notional={Notional} tp={TP} sl={SL}", symbol, entry, notional, tp, sl);
+                logger.LogInformation("BUY {Symbol}: entry={Entry} notional={Notional}", symbol, entry, notional);
             }
             catch (Exception ex)
             {

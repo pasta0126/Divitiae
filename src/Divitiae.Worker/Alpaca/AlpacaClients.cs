@@ -146,19 +146,14 @@ namespace Divitiae.Worker.Alpaca
 
         public async Task SubmitBracketOrderNotionalAsync(BracketOrderRequest request, CancellationToken ct)
         {
-            // Fractional (notional) orders must be DAY, override if needed
-            var tif = string.Equals(request.TimeInForce, "day", StringComparison.OrdinalIgnoreCase) ? "day" : (request.NotionalUsd > 0 ? "day" : request.TimeInForce);
-
+            // Bracket no soportado con notional (fraccional) -> degradar a orden simple market DAY por notional
             var body = new
             {
                 symbol = request.Symbol,
                 side = request.Side == OrderSide.Buy ? "buy" : "sell",
                 type = "market",
-                time_in_force = tif,
-                notional = request.NotionalUsd,
-                order_class = "bracket",
-                take_profit = new { limit_price = request.TakeProfitLimitPrice },
-                stop_loss = new { stop_price = request.StopLossStopPrice }
+                time_in_force = "day",
+                notional = request.NotionalUsd
             };
 
             var resp = await _http.PostAsJsonAsync("orders", body, JsonCfg.Options, ct);
