@@ -26,7 +26,7 @@ namespace Divitiae.Worker
         {
             var opts = options.Value;
 
-            _ui.RenderBanner("Divitiae Worker", Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Unknown", opts.Symbols);
+            _ui.RenderBanner("Divitiae Worker", opts.Symbols);
 
             foreach (var symbol in opts.Symbols)
             {

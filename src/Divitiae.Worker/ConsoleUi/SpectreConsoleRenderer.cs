@@ -48,7 +48,7 @@ namespace Divitiae.Worker.ConsoleUi
 
     public interface IConsoleRenderer
     {
-        void RenderBanner(string appName, string environment, string[] symbols);
+        void RenderBanner(string appName, string[] symbols);
         void RenderCycleStart(DateTime utcNow);
         void RenderMarketState(bool isOpen, DateTime utcNow);
         void BeginSymbolsTable();
@@ -65,11 +65,10 @@ namespace Divitiae.Worker.ConsoleUi
     {
         private Table? _table;
 
-        public void RenderBanner(string appName, string environment, string[] symbols)
+        public void RenderBanner(string appName, string[] symbols)
         {
             AnsiConsole.Clear();
             AnsiConsole.Write(new FigletText(appName).Color(Color.Cyan1));
-            AnsiConsole.MarkupLine("[grey]Environment:[/] [bold]{0}[/]", environment);
             if (symbols.Length > 0)
                 AnsiConsole.MarkupLine("[grey]Symbols:[/] [yellow]{0}[/]", string.Join(", ", symbols));
             AnsiConsole.WriteLine();
