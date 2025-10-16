@@ -36,12 +36,14 @@ namespace Divitiae.Worker.Alpaca
         private readonly HttpClient _tradingHttp;
         private readonly HttpClient _marketHttp;
         private readonly ILogger<AlpacaAssetClient> _logger;
+        private readonly AlpacaOptions _opts;
 
-        public AlpacaAssetClient(IHttpClientFactory httpClientFactory, ILogger<AlpacaAssetClient> logger)
+        public AlpacaAssetClient(IHttpClientFactory httpClientFactory, IOptions<AlpacaOptions> opts, ILogger<AlpacaAssetClient> logger)
         {
             _tradingHttp = httpClientFactory.CreateClient("alpaca-trading");
             _marketHttp = httpClientFactory.CreateClient("alpaca-marketdata");
             _logger = logger;
+            _opts = opts.Value;
         }
 
         public async Task<IReadOnlyList<Asset>> GetAssetsAsync(CancellationToken ct)
@@ -68,8 +70,7 @@ namespace Divitiae.Worker.Alpaca
 
         public async Task<decimal?> GetLastTradePriceAsync(string symbol, CancellationToken ct)
         {
-            // Use latest bars endpoint to derive last close as a proxy for last trade
-            var url = $"stocks/{symbol}/trades/latest";
+            var url = $"stocks/{symbol}/trades/latest?feed={Uri.EscapeDataString(_opts.MarketDataFeed)}";
             using var resp = await _marketHttp.GetAsync(url, ct);
             if (!resp.IsSuccessStatusCode)
             {
@@ -218,9 +219,14 @@ namespace Divitiae.Worker.Alpaca
         {
             var now = DateTime.UtcNow;
             var start = now.AddMinutes(-limit - 5);
-            var url = $"stocks/{symbol}/bars?timeframe=1Min&limit={limit}&start={Uri.EscapeDataString(start.ToString("O"))}&end={Uri.EscapeDataString(now.ToString("O"))}";
+            var url = $"stocks/{symbol}/bars?timeframe=1Min&limit={limit}&start={Uri.EscapeDataString(start.ToString("O"))}&end={Uri.EscapeDataString(now.ToString("O"))}&feed={Uri.EscapeDataString(_opts.MarketDataFeed)}";
             using var resp = await _http.GetAsync(url, ct);
-            resp.EnsureSuccessStatusCode();
+            if (!resp.IsSuccessStatusCode)
+            {
+                var content = await resp.Content.ReadAsStringAsync(ct);
+                _logger.LogError("Market data bars failed for {Symbol}: {Status} {Body}", symbol, resp.StatusCode, content);
+                return Array.Empty<Bar>();
+            }
             var json = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonCfg.Options, ct);
             if (json.TryGetProperty("bars", out var barsEl) && barsEl.ValueKind == JsonValueKind.Array)
             {
@@ -238,18 +244,21 @@ namespace Divitiae.Worker.Alpaca
                     };
                     list.Add(Map(dto));
                 }
-                _logger.LogInformation("Fetched {Count} seed bars for {Symbol}", list.Count, symbol);
                 return list;
             }
-            _logger.LogWarning("No bars array in market data response for {Symbol}", symbol);
             return Array.Empty<Bar>();
         }
 
         public async Task<Bar?> GetLatestMinuteBarAsync(string symbol, CancellationToken ct)
         {
-            var url = $"stocks/{symbol}/bars?timeframe=1Min&limit=1";
+            var url = $"stocks/{symbol}/bars?timeframe=1Min&limit=1&feed={Uri.EscapeDataString(_opts.MarketDataFeed)}";
             using var resp = await _http.GetAsync(url, ct);
-            resp.EnsureSuccessStatusCode();
+            if (!resp.IsSuccessStatusCode)
+            {
+                var content = await resp.Content.ReadAsStringAsync(ct);
+                _logger.LogError("Latest bar failed for {Symbol}: {Status} {Body}", symbol, resp.StatusCode, content);
+                return null;
+            }
             var json = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonCfg.Options, ct);
             if (json.TryGetProperty("bars", out var barsEl) && barsEl.ValueKind == JsonValueKind.Array && barsEl.GetArrayLength() > 0)
             {
@@ -263,11 +272,8 @@ namespace Divitiae.Worker.Alpaca
                     C = el.GetProperty("c").GetDecimal(),
                     V = el.GetProperty("v").GetInt64(),
                 };
-                var mapped = Map(dto);
-                _logger.LogDebug("Latest bar {Symbol}: {Time} O={O} H={H} L={L} C={C} V={V}", symbol, mapped.Time, mapped.Open, mapped.High, mapped.Low, mapped.Close, mapped.Volume);
-                return mapped;
+                return Map(dto);
             }
-            _logger.LogWarning("No latest bar returned for {Symbol}", symbol);
             return null;
         }
     }

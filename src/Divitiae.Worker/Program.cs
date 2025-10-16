@@ -19,7 +19,6 @@ builder.Logging.AddSerilog(Log.Logger, dispose: true);
 
 // Bind configuration
 builder.Services.Configure<AlpacaOptions>(builder.Configuration.GetSection("Alpaca"));
-builder.Services.Configure<ScannerOptions>(builder.Configuration.GetSection("Scanner"));
 
 // Http clients for Alpaca endpoints
 builder.Services.AddHttpClient("alpaca-trading", (sp, client) =>
@@ -42,10 +41,8 @@ builder.Services.AddHttpClient("alpaca-marketdata", (sp, client) =>
 builder.Services.AddSingleton<IClock, SystemClock>();
 builder.Services.AddSingleton<IAlpacaTradingClient, AlpacaTradingClient>();
 builder.Services.AddSingleton<IAlpacaMarketDataClient, AlpacaMarketDataClient>();
-builder.Services.AddSingleton<IAlpacaAssetClient, AlpacaAssetClient>();
 builder.Services.AddSingleton<IBarCache, BarCache>();
 builder.Services.AddSingleton<IStrategy, EmaCrossoverStrategy>();
-builder.Services.AddSingleton<IAssetScanner, AssetScanner>();
 builder.Services.AddHostedService<Worker>();
 
 var host = builder.Build();

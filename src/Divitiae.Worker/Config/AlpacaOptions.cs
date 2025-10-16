@@ -4,9 +4,10 @@ namespace Divitiae.Worker.Config
     {
         public string ApiKeyId { get; set; } = string.Empty;
         public string ApiSecretKey { get; set; } = string.Empty;
-        public string TradingApiBaseUrl { get; set; } = string.Empty;
-        public string MarketDataApiBaseUrl { get; set; } = string.Empty;
-        public string[] Symbols { get; set; } = [];
+        public string TradingApiBaseUrl { get; set; } = "https://paper-api.alpaca.markets";
+        public string MarketDataApiBaseUrl { get; set; } = "https://data.alpaca.markets";
+        public string MarketDataFeed { get; set; } = "iex"; // iex (free) or sip (paid)
+        public string[] Symbols { get; set; } = ["AAPL", "MSFT", "SPY"];
         public int EmaShortPeriod { get; set; } = 5;
         public int EmaLongPeriod { get; set; } = 20;
         public double PositionNotionalFraction { get; set; } = 0.10;
