@@ -39,57 +39,61 @@ namespace Divitiae.Worker
                 _ui.RenderCycleStart(clock.UtcNow);
 
                 var cycleStart = clock.UtcNow;
+                TimeSpan nextDelay = TimeSpan.FromSeconds(opts.PollingIntervalSeconds);
+                string nextDelayMessage = "Waiting for next cycle...";
                 try
                 {
                     var marketOpen = await trading.IsMarketOpenAsync(stoppingToken);
                     _ui.RenderMarketState(marketOpen, cycleStart);
                     logger.LogInformation("Market {State} at {Time}", marketOpen ? "OPEN" : "CLOSED", cycleStart);
+
                     if (!marketOpen)
                     {
-                        await Task.Delay(TimeSpan.FromSeconds(opts.PollingIntervalSeconds), stoppingToken);
-                        _ui.RenderCycleEnd(clock.UtcNow - cycleStart);
-                        logger.LogInformation("Cycle end (duration {Dur} ms)\n", (int)(clock.UtcNow - cycleStart).TotalMilliseconds);
-                        continue;
+                        // Market closed: skip symbol processing and wait 15 minutes
+                        nextDelay = TimeSpan.FromMinutes(15);
+                        nextDelayMessage = "Market closed. Waiting 15 minutes...";
                     }
-
-                    // Symbols table
-                    _ui.BeginSymbolsTable();
-
-                    foreach (var symbol in opts.Symbols)
+                    else
                     {
-                        var bar = await marketData.GetLatestMinuteBarAsync(symbol, stoppingToken);
-                        if (bar is null) continue;
-                        barCache.Add(symbol, bar);
+                        // Symbols table
+                        _ui.BeginSymbolsTable();
 
-                        var decision = strategy.Evaluate(symbol, barCache.Get(symbol));
-
-                        var prevClose = barCache.Get(symbol).Count > 1 ? barCache.Get(symbol)[^2].Close : (decimal?)null;
-                        decimal? changeAbs = prevClose.HasValue ? bar.Close - prevClose.Value : null;
-                        decimal? changePct = prevClose.HasValue && prevClose.Value != 0 ? (bar.Close - prevClose.Value) / prevClose.Value * 100m : null;
-
-                        string decisionLabel = "[yellow]HOLD[/]";
-                        string? notes = null;
-
-                        if (decision.Action == TradeAction.Buy)
+                        foreach (var symbol in opts.Symbols)
                         {
-                            var executed = await TryEnterLongAsync(symbol, decision, stoppingToken);
-                            decisionLabel = executed ? "[green]BUY[/]" : "[yellow]HOLD[/]";
-                        }
-                        else if (decision.Action == TradeAction.Sell)
-                        {
-                            var executed = await TryExitLongAsync(symbol, stoppingToken);
-                            decisionLabel = executed ? "[red]SELL[/]" : "[yellow]HOLD[/]";
-                        }
-                        else
-                        {
-                            // Strategy decided to hold
-                            notes = decision.Reason;
+                            var bar = await marketData.GetLatestMinuteBarAsync(symbol, stoppingToken);
+                            if (bar is null) continue;
+                            barCache.Add(symbol, bar);
+
+                            var decision = strategy.Evaluate(symbol, barCache.Get(symbol));
+
+                            var prevClose = barCache.Get(symbol).Count > 1 ? barCache.Get(symbol)[^2].Close : (decimal?)null;
+                            decimal? changeAbs = prevClose.HasValue ? bar.Close - prevClose.Value : null;
+                            decimal? changePct = prevClose.HasValue && prevClose.Value != 0 ? (bar.Close - prevClose.Value) / prevClose.Value * 100m : null;
+
+                            string decisionLabel = "[yellow]HOLD[/]";
+                            string? notes = null;
+
+                            if (decision.Action == TradeAction.Buy)
+                            {
+                                var executed = await TryEnterLongAsync(symbol, decision, stoppingToken);
+                                decisionLabel = executed ? "[green]BUY[/]" : "[yellow]HOLD[/]";
+                            }
+                            else if (decision.Action == TradeAction.Sell)
+                            {
+                                var executed = await TryExitLongAsync(symbol, stoppingToken);
+                                decisionLabel = executed ? "[red]SELL[/]" : "[yellow]HOLD[/]";
+                            }
+                            else
+                            {
+                                // Strategy decided to hold
+                                notes = decision.Reason;
+                            }
+
+                            _ui.AddSymbolRow(symbol, bar.Close, changeAbs, changePct, decisionLabel, notes);
                         }
 
-                        _ui.AddSymbolRow(symbol, bar.Close, changeAbs, changePct, decisionLabel, notes);
+                        _ui.RenderSymbolsTable();
                     }
-
-                    _ui.RenderSymbolsTable();
                 }
                 catch (TaskCanceledException)
                 {
@@ -104,13 +108,13 @@ namespace Divitiae.Worker
                     logger.LogInformation("Cycle end (duration {Dur} ms)\n", (int)(clock.UtcNow - cycleStart).TotalMilliseconds);
                 }
 
-                // Status spinner between cycles
+                // Unified wait using dynamic delay
                 await AnsiConsole.Status()
-                    .StartAsync("Waiting for next cycle...", async ctx =>
+                    .StartAsync(nextDelayMessage, async ctx =>
                     {
                         ctx.Spinner(Spinner.Known.Dots12);
-                        ctx.Status("Waiting interval");
-                        await Task.Delay(TimeSpan.FromSeconds(opts.PollingIntervalSeconds), stoppingToken);
+                        ctx.Status(nextDelayMessage);
+                        await Task.Delay(nextDelay, stoppingToken);
                     });
             }
         }
