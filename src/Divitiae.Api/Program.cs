@@ -1,5 +1,6 @@
 using Serilog;
 using Divitiae.Api.Alpaca;
+using Divitiae.Api.Controllers;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,9 +19,11 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// Alpaca Http clients and options
+// Options
 builder.Services.Configure<AlpacaOptions>(builder.Configuration.GetSection("Alpaca"));
+builder.Services.Configure<SymbolGroupsOptions>(builder.Configuration.GetSection("SymbolGroups"));
 
+// Alpaca Http clients
 builder.Services.AddHttpClient("alpaca-trading", (sp, client) =>
 {
     var opts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<AlpacaOptions>>().Value;
@@ -37,12 +40,12 @@ builder.Services.AddHttpClient("alpaca-marketdata", (sp, client) =>
     client.DefaultRequestHeaders.Add("APCA-API-SECRET-KEY", opts.ApiSecretKey);
 });
 
+// Clients
 builder.Services.AddSingleton<IAlpacaAssetClient, AlpacaAssetClient>();
 builder.Services.AddSingleton<IAlpacaMarketDataClient, AlpacaMarketDataClient>();
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
