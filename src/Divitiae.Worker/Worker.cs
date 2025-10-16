@@ -45,6 +45,7 @@ namespace Divitiae.Worker
                     {
                         await Task.Delay(TimeSpan.FromSeconds(opts.PollingIntervalSeconds), stoppingToken);
                         logger.LogInformation("Cycle end: market closed (duration {Dur} ms)", (int)(clock.UtcNow - cycleStart).TotalMilliseconds);
+                        logger.LogInformation(" ");
                         continue;
                     }
 
@@ -90,6 +91,7 @@ namespace Divitiae.Worker
                 finally
                 {
                     logger.LogInformation("Cycle end (duration {Dur} ms)", (int)(clock.UtcNow - cycleStart).TotalMilliseconds);
+                    logger.LogInformation(" ");
                 }
 
                 await Task.Delay(TimeSpan.FromSeconds(opts.PollingIntervalSeconds), stoppingToken);
