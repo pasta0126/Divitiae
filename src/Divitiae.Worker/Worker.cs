@@ -19,6 +19,9 @@ namespace Divitiae.Worker
         private readonly Dictionary<string, DateTime> _cooldownUntil = new(StringComparer.OrdinalIgnoreCase);
         private TimeSpan InsufficientFundsCooldown => TimeSpan.FromMinutes(workerOptions.Value.InsufficientFundsCooldownMinutes);
 
+        private static decimal Floor2(decimal x) => Math.Floor(x * 100m) / 100m;
+        private static decimal Ceil2(decimal x) => Math.Ceiling(x * 100m) / 100m;
+
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             var opts = options.Value;
@@ -141,8 +144,16 @@ namespace Divitiae.Worker
                 return;
             }
 
+            // Compute TP/SL with exchange constraints safeguards
             var tp = last * (1m + (decimal)opts.TakeProfitPercent);
             var sl = last * (1m - (decimal)opts.StopLossPercent);
+            tp = Ceil2(tp);
+            sl = Floor2(sl);
+            var tpMin = Ceil2(last) + 0.01m; // TP must be at least 1 cent above base
+            var slMax = Floor2(last) - 0.01m; // SL must be at least 1 cent below base
+            if (tp < tpMin) tp = tpMin;
+            if (sl > slMax) sl = slMax;
+            if (sl <= 0) sl = 0.01m;
 
             try
             {
@@ -151,15 +162,15 @@ namespace Divitiae.Worker
                     Symbol = symbol,
                     Side = OrderSide.Buy,
                     NotionalUsd = decimal.Round(notional, 2),
-                    TakeProfitLimitPrice = decimal.Round(tp, 2),
-                    StopLossStopPrice = decimal.Round(sl, 2),
+                    TakeProfitLimitPrice = tp,
+                    StopLossStopPrice = sl,
                     TimeInForce = opts.TimeInForce
                 }, ct);
 
                 // Try to fetch fresh position snapshot after order (may still be pending)
                 var pos = await trading.GetPositionAsync(symbol, ct);
                 var entry = pos?.AvgEntryPrice > 0 ? pos!.AvgEntryPrice : last;
-                logger.LogInformation("BUY {Symbol}: entry={Entry} notional={Notional} tp={TP} trail%={Trail}", symbol, entry, notional, decimal.Round(tp, 2), options.Value.TrailingStopPercent);
+                logger.LogInformation("BUY {Symbol}: entry={Entry} notional={Notional} tp={TP} sl={SL}", symbol, entry, notional, tp, sl);
             }
             catch (Exception ex)
             {

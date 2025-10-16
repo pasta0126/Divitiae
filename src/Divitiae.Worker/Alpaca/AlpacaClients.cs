@@ -146,13 +146,15 @@ namespace Divitiae.Worker.Alpaca
 
         public async Task SubmitBracketOrderNotionalAsync(BracketOrderRequest request, CancellationToken ct)
         {
-            // Alpaca brackets require fixed stop_loss.stop_price, trailing is not supported here.
+            // Fractional (notional) orders must be DAY, override if needed
+            var tif = string.Equals(request.TimeInForce, "day", StringComparison.OrdinalIgnoreCase) ? "day" : (request.NotionalUsd > 0 ? "day" : request.TimeInForce);
+
             var body = new
             {
                 symbol = request.Symbol,
                 side = request.Side == OrderSide.Buy ? "buy" : "sell",
                 type = "market",
-                time_in_force = request.TimeInForce,
+                time_in_force = tif,
                 notional = request.NotionalUsd,
                 order_class = "bracket",
                 take_profit = new { limit_price = request.TakeProfitLimitPrice },
