@@ -1,4 +1,4 @@
-using Divitiae.Worker.Alpaca;
+﻿using Divitiae.Worker.Alpaca;
 using Divitiae.Worker.Config;
 using Divitiae.Worker.Strategy;
 using Divitiae.Worker.Trading;
@@ -25,8 +25,6 @@ namespace Divitiae.Worker
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             var opts = options.Value;
-            logger.LogInformation("Cycle start: symbols=[{Symbols}]", string.Join(",", opts.Symbols));
-
             // Preload bars once at startup (noisy details suppressed)
             foreach (var symbol in opts.Symbols)
             {
@@ -36,6 +34,8 @@ namespace Divitiae.Worker
 
             while (!stoppingToken.IsCancellationRequested)
             {
+                logger.LogInformation("Cycle start: symbols=[{Symbols}]", string.Join(",", opts.Symbols));
+
                 var cycleStart = clock.UtcNow;
                 try
                 {
@@ -44,8 +44,7 @@ namespace Divitiae.Worker
                     if (!marketOpen)
                     {
                         await Task.Delay(TimeSpan.FromSeconds(opts.PollingIntervalSeconds), stoppingToken);
-                        logger.LogInformation("Cycle end: market closed (duration {Dur} ms)", (int)(clock.UtcNow - cycleStart).TotalMilliseconds);
-                        logger.LogInformation(" ");
+                        logger.LogInformation("Cycle end: market closed (duration {Dur} ms)\n", (int)(clock.UtcNow - cycleStart).TotalMilliseconds);
                         continue;
                     }
 
@@ -90,8 +89,7 @@ namespace Divitiae.Worker
                 }
                 finally
                 {
-                    logger.LogInformation("Cycle end (duration {Dur} ms)", (int)(clock.UtcNow - cycleStart).TotalMilliseconds);
-                    logger.LogInformation(" ");
+                    logger.LogInformation("Cycle end (duration {Dur} ms)\n", (int)(clock.UtcNow - cycleStart).TotalMilliseconds);
                 }
 
                 await Task.Delay(TimeSpan.FromSeconds(opts.PollingIntervalSeconds), stoppingToken);
@@ -187,7 +185,7 @@ namespace Divitiae.Worker
             var pnlUsd = (exitPrice - entryPrice) * pos.Quantity;
             var pnlPct = entryPrice != 0 ? (exitPrice - entryPrice) / entryPrice * 100m : 0m;
 
-            logger.LogInformation("SELL {Symbol}: entry={Entry} exit?{Exit} qty={Qty} PnL={PnlUsd} USD ({PnlPct:F2}%)", symbol, entryPrice, exitPrice, pos.Quantity, decimal.Round(pnlUsd, 2), pnlPct);
+            logger.LogInformation("SELL {Symbol}: entry={Entry} exit≈{Exit} qty={Qty} PnL={PnlUsd} USD ({PnlPct:F2}%)", symbol, entryPrice, exitPrice, pos.Quantity, decimal.Round(pnlUsd, 2), pnlPct);
         }
     }
 }
