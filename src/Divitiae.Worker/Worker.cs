@@ -10,33 +10,44 @@ namespace Divitiae.Worker
     {
         private readonly ILogger<Worker> _logger;
         private readonly IOptions<AlpacaOptions> _options;
+        private readonly IOptions<ScannerOptions> _scannerOptions;
         private readonly IAlpacaTradingClient _trading;
         private readonly IAlpacaMarketDataClient _marketData;
+        private readonly IAlpacaAssetClient _assetClient;
         private readonly IBarCache _barCache;
         private readonly IStrategy _strategy;
         private readonly IClock _clock;
+        private readonly IAssetScanner _scanner;
+        private DateTime _lastScanLocal = DateTime.MinValue;
 
         public Worker(
             ILogger<Worker> logger,
             IOptions<AlpacaOptions> options,
+            IOptions<ScannerOptions> scannerOptions,
             IAlpacaTradingClient trading,
             IAlpacaMarketDataClient marketData,
+            IAlpacaAssetClient assetClient,
             IBarCache barCache,
             IStrategy strategy,
-            IClock clock)
+            IClock clock,
+            IAssetScanner scanner)
         {
             _logger = logger;
             _options = options;
+            _scannerOptions = scannerOptions;
             _trading = trading;
             _marketData = marketData;
+            _assetClient = assetClient;
             _barCache = barCache;
             _strategy = strategy;
             _clock = clock;
+            _scanner = scanner;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             var opts = _options.Value;
+            var scanOpts = _scannerOptions.Value;
             _logger.LogInformation("Starting Alpaca worker for symbols: {Symbols}", string.Join(",", opts.Symbols));
 
             // Preload bars
@@ -61,6 +72,9 @@ namespace Divitiae.Worker
             {
                 try
                 {
+                    // hourly scanning between 08-23 local
+                    await TryRunScanIfDueAsync(scanOpts, stoppingToken);
+
                     foreach (var symbol in opts.Symbols)
                     {
                         var newBar = await _marketData.GetLatestMinuteBarAsync(symbol, stoppingToken);
@@ -92,6 +106,21 @@ namespace Divitiae.Worker
                 }
 
                 await Task.Delay(TimeSpan.FromSeconds(opts.PollingIntervalSeconds), stoppingToken);
+            }
+        }
+
+        private async Task TryRunScanIfDueAsync(ScannerOptions scanOpts, CancellationToken ct)
+        {
+            if (!scanOpts.Enabled) return;
+            var now = DateTime.Now;
+            if (now.Hour < scanOpts.StartHourLocal || now.Hour >= scanOpts.EndHourLocal)
+                return;
+
+            if (_lastScanLocal == DateTime.MinValue || (now - _lastScanLocal).TotalMinutes >= scanOpts.IntervalMinutes)
+            {
+                _lastScanLocal = now;
+                _logger.LogInformation("Running hourly scanner at {Now} (window {Start}-{End} local)", now, scanOpts.StartHourLocal, scanOpts.EndHourLocal);
+                await _scanner.ScanAsync(ct);
             }
         }
 

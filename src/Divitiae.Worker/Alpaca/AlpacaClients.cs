@@ -16,6 +16,78 @@ namespace Divitiae.Worker.Alpaca
         };
     }
 
+    public interface IAlpacaAssetClient
+    {
+        Task<IReadOnlyList<Asset>> GetAssetsAsync(CancellationToken ct);
+        Task<decimal?> GetLastTradePriceAsync(string symbol, CancellationToken ct);
+    }
+
+    public record Asset
+    {
+        public required string Symbol { get; init; }
+        public required string Name { get; init; }
+        public bool Tradable { get; init; }
+        public bool Marginable { get; init; }
+        public string Class { get; init; } = "us_equity";
+    }
+
+    public class AlpacaAssetClient : IAlpacaAssetClient
+    {
+        private readonly HttpClient _tradingHttp;
+        private readonly HttpClient _marketHttp;
+        private readonly ILogger<AlpacaAssetClient> _logger;
+
+        public AlpacaAssetClient(IHttpClientFactory httpClientFactory, ILogger<AlpacaAssetClient> logger)
+        {
+            _tradingHttp = httpClientFactory.CreateClient("alpaca-trading");
+            _marketHttp = httpClientFactory.CreateClient("alpaca-marketdata");
+            _logger = logger;
+        }
+
+        public async Task<IReadOnlyList<Asset>> GetAssetsAsync(CancellationToken ct)
+        {
+            var list = new List<Asset>();
+            using var resp = await _tradingHttp.GetAsync("assets?status=active&asset_class=us_equity", ct);
+            resp.EnsureSuccessStatusCode();
+            var json = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonCfg.Options, ct);
+            if (json.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var el in json.EnumerateArray())
+                {
+                    if (!el.TryGetProperty("symbol", out var s)) continue;
+                    var symbol = s.GetString() ?? string.Empty;
+                    var name = el.TryGetProperty("name", out var n) ? n.GetString() ?? symbol : symbol;
+                    var tradable = el.TryGetProperty("tradable", out var t) && t.GetBoolean();
+                    var marginable = el.TryGetProperty("marginable", out var m) && m.GetBoolean();
+                    list.Add(new Asset { Symbol = symbol, Name = name, Tradable = tradable, Marginable = marginable });
+                }
+            }
+            _logger.LogInformation("Fetched {Count} active assets", list.Count);
+            return list;
+        }
+
+        public async Task<decimal?> GetLastTradePriceAsync(string symbol, CancellationToken ct)
+        {
+            // Use latest bars endpoint to derive last close as a proxy for last trade
+            var url = $"stocks/{symbol}/trades/latest";
+            using var resp = await _marketHttp.GetAsync(url, ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Failed to get last trade for {Symbol}: {Status}", symbol, resp.StatusCode);
+                return null;
+            }
+            var json = await resp.Content.ReadFromJsonAsync<JsonElement>(JsonCfg.Options, ct);
+            if (json.TryGetProperty("trade", out var trade) && trade.ValueKind == JsonValueKind.Object)
+            {
+                if (trade.TryGetProperty("p", out var priceEl))
+                {
+                    return priceEl.GetDecimal();
+                }
+            }
+            return null;
+        }
+    }
+
     public class AlpacaTradingClient : IAlpacaTradingClient
     {
         private readonly HttpClient _http;
