@@ -44,6 +44,7 @@ namespace Divitiae.Worker.Trading
         Task<bool> HasOpenOrdersAsync(string symbol, CancellationToken ct);
         Task SubmitBracketOrderNotionalAsync(BracketOrderRequest request, CancellationToken ct);
         Task ClosePositionAsync(string symbol, CancellationToken ct);
+        Task<bool> IsMarketOpenAsync(CancellationToken ct);
     }
 
     public interface IAlpacaMarketDataClient

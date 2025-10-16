@@ -27,14 +27,14 @@ namespace Divitiae.Worker
             // Preload bars
             foreach (var symbol in opts.Symbols)
             {
-                logger.LogInformation("Seeding bars for {Symbol} (limit={Limit})", symbol, opts.BarsSeed);
+                logger.LogDebug("Seeding bars for {Symbol} (limit={Limit})", symbol, opts.BarsSeed);
                 var seedBars = await marketData.GetMinuteBarsAsync(symbol, opts.BarsSeed, stoppingToken);
                 barCache.Seed(symbol, seedBars);
                 if (seedBars.Count > 0)
                 {
                     var first = seedBars.First();
                     var last = seedBars.Last();
-                    logger.LogInformation("Seeded {Count} bars for {Symbol} from {Start} to {End}", seedBars.Count, symbol, first.Time, last.Time);
+                    logger.LogDebug("Seeded {Count} bars for {Symbol} from {Start} to {End}", seedBars.Count, symbol, first.Time, last.Time);
                 }
                 else
                 {
@@ -52,10 +52,9 @@ namespace Divitiae.Worker
                         if (newBar != null)
                         {
                             barCache.Add(symbol, newBar);
-                            logger.LogInformation("New 1m bar {Symbol} @ {Time} O={O} H={H} L={L} C={C} V={V}", symbol, newBar.Time, newBar.Open, newBar.High, newBar.Low, newBar.Close, newBar.Volume);
+                            logger.LogDebug("1m bar {Symbol} {Time} O={O} H={H} L={L} C={C} V={V}", symbol, newBar.Time, newBar.Open, newBar.High, newBar.Low, newBar.Close, newBar.Volume);
 
                             var decision = strategy.Evaluate(symbol, barCache.Get(symbol));
-                            logger.LogDebug("Decision for {Symbol}: {Action} ({Reason})", symbol, decision.Action, decision.Reason ?? "");
                             if (decision.Action == TradeAction.Buy)
                             {
                                 await TryEnterLongAsync(symbol, decision, stoppingToken);
@@ -64,10 +63,6 @@ namespace Divitiae.Worker
                             {
                                 await TryExitLongAsync(symbol, stoppingToken);
                             }
-                        }
-                        else
-                        {
-                            logger.LogWarning("No latest bar available for {Symbol}", symbol);
                         }
                     }
                 }
@@ -86,7 +81,7 @@ namespace Divitiae.Worker
             {
                 if (clock.UtcNow < until)
                 {
-                    logger.LogInformation("Skip enter for {Symbol}; on cooldown until {Until}", symbol, until);
+                    logger.LogInformation("Skip enter for {Symbol}; cooldown until {Until}", symbol, until);
                     return true;
                 }
                 _cooldownUntil.Remove(symbol);
@@ -98,32 +93,28 @@ namespace Divitiae.Worker
         {
             var until = clock.UtcNow.Add(InsufficientFundsCooldown);
             _cooldownUntil[symbol] = until;
-            logger.LogWarning("Starting cooldown for {Symbol} until {Until} due to: {Reason}", symbol, until, reason);
+            logger.LogWarning("Cooldown {Symbol} until {Until}. Reason: {Reason}", symbol, until, reason);
         }
 
         private async Task TryEnterLongAsync(string symbol, TradeDecision decision, CancellationToken ct)
         {
             var opts = options.Value;
 
-            if (IsOnCooldown(symbol))
+            if (IsOnCooldown(symbol)) return;
+
+            // Market open check
+            var marketOpen = await trading.IsMarketOpenAsync(ct);
+            if (!marketOpen)
             {
+                logger.LogInformation("Market closed. Skip buy for {Symbol}", symbol);
                 return;
             }
 
             var hasPosition = await trading.HasOpenPositionAsync(symbol, ct);
             var hasOpenOrders = await trading.HasOpenOrdersAsync(symbol, ct);
-            logger.LogInformation("Pre-checks {Symbol}: hasPosition={HasPos} hasOpenOrders={HasOrd}", symbol, hasPosition, hasOpenOrders);
+            logger.LogInformation("Pre-checks {Symbol}: pos={HasPos} orders={HasOrd}", symbol, hasPosition, hasOpenOrders);
 
-            if (hasPosition)
-            {
-                logger.LogInformation("Skip enter; already in position for {Symbol}", symbol);
-                return;
-            }
-            if (hasOpenOrders)
-            {
-                logger.LogInformation("Skip enter; open orders exist for {Symbol}", symbol);
-                return;
-            }
+            if (hasPosition || hasOpenOrders) return;
 
             var account = await trading.GetAccountAsync(ct);
 
@@ -133,7 +124,7 @@ namespace Divitiae.Worker
 
             if (account.BuyingPower < (decimal)opts.MinNotionalUsd)
             {
-                logger.LogInformation("Skip enter; insufficient buying power for {Symbol}. buyingPower={BP} minNotional={Min}", symbol, account.BuyingPower, (decimal)opts.MinNotionalUsd);
+                logger.LogInformation("Insufficient buying power {BP} < {Min} for {Symbol}", account.BuyingPower, (decimal)opts.MinNotionalUsd, symbol);
                 StartCooldown(symbol, "Insufficient buying power");
                 return;
             }
@@ -148,8 +139,6 @@ namespace Divitiae.Worker
             var tp = last * (1m + (decimal)opts.TakeProfitPercent);
             var sl = last * (1m - (decimal)opts.StopLossPercent);
 
-            logger.LogInformation("Submitting bracket buy for {Symbol}: notional={Notional} last={Last} tp={TP} sl={SL}", symbol, notional, last, tp, sl);
-
             try
             {
                 await trading.SubmitBracketOrderNotionalAsync(new BracketOrderRequest
@@ -161,10 +150,13 @@ namespace Divitiae.Worker
                     StopLossStopPrice = decimal.Round(sl, 2),
                     TimeInForce = opts.TimeInForce
                 }, ct);
+
+                logger.LogInformation("BUY submitted {Symbol}: notional={Notional} last={Last} tp={TP} sl/trail%={Trail}",
+                    symbol, notional, last, decimal.Round(tp, 2), options.Value.TrailingStopPercent > 0 ? (decimal?)options.Value.TrailingStopPercent : null);
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Order submit failed for {Symbol}; entering cooldown", symbol);
+                logger.LogError(ex, "Order submit failed for {Symbol}; cooldown", symbol);
                 StartCooldown(symbol, "Order submission failure");
             }
         }
@@ -178,7 +170,7 @@ namespace Divitiae.Worker
                 return;
             }
 
-            logger.LogInformation("Flattening position for {Symbol}");
+            logger.LogInformation("Flatten {Symbol}", symbol);
             await trading.ClosePositionAsync(symbol, ct);
         }
     }

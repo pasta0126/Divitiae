@@ -184,6 +184,18 @@ namespace Divitiae.Worker.Alpaca
                 _logger.LogInformation("Position close request sent for {Symbol}", symbol);
             }
         }
+
+        public async Task<bool> IsMarketOpenAsync(CancellationToken ct)
+        {
+            // Alpaca clock endpoint: GET /v2/clock
+            var doc = await _http.GetFromJsonAsync<JsonElement>("clock", JsonCfg.Options, ct);
+            if (doc.ValueKind != JsonValueKind.Object) return true; // fallback
+            if (doc.TryGetProperty("is_open", out var openEl) && openEl.ValueKind == JsonValueKind.True)
+                return true;
+            if (doc.TryGetProperty("is_open", out openEl) && openEl.ValueKind == JsonValueKind.False)
+                return false;
+            return true;
+        }
     }
 
     public class AlpacaMarketDataClient : IAlpacaMarketDataClient
