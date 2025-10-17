@@ -48,6 +48,13 @@ namespace Divitiae.Worker.Trading
         public long Volume { get; init; }
     }
 
+    public record MarketClock
+    {
+        public bool IsOpen { get; init; }
+        public DateTime? NextOpen { get; init; }
+        public DateTime? NextClose { get; init; }
+    }
+
     public interface IAlpacaTradingClient
     {
         Task<Account> GetAccountAsync(CancellationToken ct);
@@ -57,6 +64,7 @@ namespace Divitiae.Worker.Trading
         Task ClosePositionAsync(string symbol, CancellationToken ct);
         Task<bool> IsMarketOpenAsync(CancellationToken ct);
         Task<Position?> GetPositionAsync(string symbol, CancellationToken ct);
+        Task<MarketClock> GetClockAsync(CancellationToken ct);
     }
 
     public interface IAlpacaMarketDataClient

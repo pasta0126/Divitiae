@@ -43,15 +43,28 @@ namespace Divitiae.Worker
                 string nextDelayMessage = "Waiting for next cycle...";
                 try
                 {
-                    var marketOpen = await trading.IsMarketOpenAsync(stoppingToken);
+                    // Consult clock for precise scheduling
+                    var clockInfo = await trading.GetClockAsync(stoppingToken);
+                    var marketOpen = clockInfo.IsOpen;
                     _ui.RenderMarketState(marketOpen, cycleStart);
                     logger.LogInformation("Market {State} at {Time}", marketOpen ? "OPEN" : "CLOSED", cycleStart);
 
                     if (!marketOpen)
                     {
-                        // Market closed: skip symbol processing and wait 15 minutes
-                        nextDelay = TimeSpan.FromMinutes(15);
-                        nextDelayMessage = "Market closed. Waiting 15 minutes...";
+                        // Market closed: wait until next official open if available; fallback to 15 minutes
+                        if (clockInfo.NextOpen.HasValue)
+                        {
+                            var waitUntil = clockInfo.NextOpen.Value.ToUniversalTime();
+                            var delay = waitUntil - clock.UtcNow;
+                            if (delay < TimeSpan.Zero) delay = TimeSpan.FromMinutes(1);
+                            nextDelay = delay;
+                            nextDelayMessage = $"Market closed. Waiting until next open at {waitUntil:u} ({delay:c})...";
+                        }
+                        else
+                        {
+                            nextDelay = TimeSpan.FromMinutes(15);
+                            nextDelayMessage = "Market closed. Waiting 15 minutes...";
+                        }
                     }
                     else
                     {

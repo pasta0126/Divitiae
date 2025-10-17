@@ -184,6 +184,22 @@ namespace Divitiae.Worker.Alpaca
             if (doc.TryGetProperty("is_open", out openEl) && openEl.ValueKind == JsonValueKind.False) return false;
             return true;
         }
+
+        public async Task<MarketClock> GetClockAsync(CancellationToken ct)
+        {
+            var doc = await _http.GetFromJsonAsync<JsonElement>("clock", JsonCfg.Options, ct);
+            bool isOpen = false; DateTime? nextOpen = null; DateTime? nextClose = null;
+            if (doc.ValueKind == JsonValueKind.Object)
+            {
+                if (doc.TryGetProperty("is_open", out var openEl))
+                    isOpen = openEl.ValueKind == JsonValueKind.True;
+                if (doc.TryGetProperty("next_open", out var no) && no.ValueKind == JsonValueKind.String && DateTime.TryParse(no.GetString(), out var dtNo))
+                    nextOpen = dtNo;
+                if (doc.TryGetProperty("next_close", out var nc) && nc.ValueKind == JsonValueKind.String && DateTime.TryParse(nc.GetString(), out var dtNc))
+                    nextClose = dtNc;
+            }
+            return new MarketClock { IsOpen = isOpen, NextOpen = nextOpen, NextClose = nextClose };
+        }
     }
 
     public class AlpacaMarketDataClient : IAlpacaMarketDataClient
