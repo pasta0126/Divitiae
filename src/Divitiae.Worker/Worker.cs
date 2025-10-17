@@ -46,7 +46,6 @@ namespace Divitiae.Worker
                     // Consult clock for precise scheduling
                     var clockInfo = await trading.GetClockAsync(stoppingToken);
                     var marketOpen = clockInfo.IsOpen;
-                    _ui.RenderMarketState(marketOpen, cycleStart);
                     logger.LogInformation("Market {State} at {Time}", marketOpen ? "OPEN" : "CLOSED", cycleStart);
 
                     if (!marketOpen)
@@ -118,7 +117,6 @@ namespace Divitiae.Worker
                 finally
                 {
                     _ui.RenderCycleEnd(clock.UtcNow - cycleStart);
-                    logger.LogInformation("Cycle end (duration {Dur} ms)\n", (int)(clock.UtcNow - cycleStart).TotalMilliseconds);
                 }
 
                 // Unified wait using dynamic delay

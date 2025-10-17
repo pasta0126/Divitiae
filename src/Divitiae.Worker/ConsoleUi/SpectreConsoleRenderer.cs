@@ -50,7 +50,6 @@ namespace Divitiae.Worker.ConsoleUi
     {
         void RenderBanner(string appName, string[] symbols);
         void RenderCycleStart(DateTime utcNow);
-        void RenderMarketState(bool isOpen, DateTime utcNow);
         void BeginSymbolsTable();
         void AddSymbolRow(string symbol, decimal close, decimal? changeAbs, decimal? changePct, string decisionLabel, string? notes = null);
         void RenderSymbolsTable();
@@ -77,12 +76,6 @@ namespace Divitiae.Worker.ConsoleUi
         public void RenderCycleStart(DateTime utcNow)
         {
             AnsiConsole.MarkupLine("\n[bold yellow]Iteration start[/] [grey]UTC {0:HH:mm:ss}[/]\n", utcNow);
-        }
-
-        public void RenderMarketState(bool isOpen, DateTime utcNow)
-        {
-            var state = isOpen ? "[green]MARKET OPEN[/]" : "[red]MARKET CLOSED[/]";
-            AnsiConsole.MarkupLine("{0} [grey]{1:HH:mm:ss} UTC[/]", state, utcNow);
         }
 
         public void BeginSymbolsTable()
