@@ -15,7 +15,7 @@ namespace Divitiae.Worker.Config
         public double TakeProfitPercent { get; set; } = 0.02;
         public double StopLossPercent { get; set; } = 0.01;
         public double TrailingStopPercent { get; set; } = 0.01; 
-        public int PollingIntervalSeconds { get; set; } = 15;
+        public int PollingIntervalSeconds { get; set; } = 300;
         public int BarsSeed { get; set; } = 100;
         public string TimeInForce { get; set; } = "gtc";
     }
