@@ -46,7 +46,7 @@ namespace Divitiae.Worker
                     // Consult clock for precise scheduling
                     var clockInfo = await trading.GetClockAsync(stoppingToken);
                     var marketOpen = clockInfo.IsOpen;
-                    logger.LogInformation("Market {State} at {Time}", marketOpen ? "OPEN" : "CLOSED", cycleStart);
+                    logger.LogInformation("Market {State}", marketOpen ? "OPEN" : "CLOSED");
 
                     if (!marketOpen)
                     {
